@@ -282,7 +282,64 @@ semester:            One
 year:                2026
 ```
 
-> **Note:** `--format json` 옵션을 사용하면 JSON 형식으로 출력됩니다.
+`--format json` 옵션을 사용하면 JSON 형식으로 출력됩니다.
+
+```bash
+rusaint chapel-info --format json information --year 2026 --semester 1
+```
+
+```json
+{
+  "year": 2026,
+  "semester": "One",
+  "general_information": {
+    "division": 2150101507,
+    "chapel_time": "수 10:30-11:20 (08110-반광준)",
+    "chapel_room": "한경직기념관 08110",
+    "floor_level": 2,
+    "seat_number": "G - 8 - 2",
+    "absence_time": 0,
+    "result": "",
+    "note": ""
+  },
+  "attendances": [
+    {
+      "division": 2150101507,
+      "class_date": "2026.03.11",
+      "category": "메시지 채플",
+      "instructor": "반광준",
+      "instructor_department": "교목실",
+      "title": "",
+      "attendance": "출석",
+      "result": "매우낮음",
+      "note": ""
+    },
+    {
+      "division": 2150101507,
+      "class_date": "2026.03.18",
+      "category": "메시지 채플",
+      "instructor": "양형주",
+      "instructor_department": "대전도안교회",
+      "title": "",
+      "attendance": "출석",
+      "result": "높음",
+      "note": ""
+    },
+    {
+      "division": 2150101507,
+      "class_date": "2026.03.25",
+      "category": "메시지 채플",
+      "instructor": "학생주간채플",
+      "instructor_department": "",
+      "title": "",
+      "attendance": "",
+      "result": "",
+      "note": ""
+    }
+  ],
+  "absence_requests": []
+}
+```
 
 ---
 
