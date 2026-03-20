@@ -2,6 +2,7 @@ use crate::application::course_schedule::model::{DetailedLecture, LectureDetail,
 use crate::application::course_schedule::utils::{
     combo_box_items, select_lv1, select_lv2, select_tab,
 };
+#[cfg(feature = "ozra-support")]
 use crate::application::utils::oz::{
     extract_oz_url_from_script_calls, fetch_data_module, parse_oz_url_params,
 };
@@ -420,6 +421,7 @@ impl<'app> CourseScheduleApplication {
         }
     }
 
+    #[cfg(feature = "ozra-support")]
     fn extract_syllabus_event_from_row(
         row: &SapTableRow,
         syllabus_col_idx: usize,
@@ -450,6 +452,7 @@ impl<'app> CourseScheduleApplication {
         Ok(detail)
     }
 
+    #[cfg(feature = "ozra-support")]
     async fn process_syllabus_event(
         &mut self,
         activate_event: Event,
@@ -558,11 +561,13 @@ impl<'app> CourseScheduleApplication {
     /// 주어진 과목번호에 해당하는 강의의 강의계획서(syllabus) 데이터를 OZ 서버에서 가져옵니다.
     /// `find_lectures` 함수를 먼저 호출하여 강의를 검색한 이후에 사용되어야 합니다.
     /// 강의계획서가 없는 강의의 경우 에러를 반환합니다.
+    #[cfg(feature = "ozra-support")]
     pub async fn lecture_syllabus(&mut self, code: &str) -> Result<LectureSyllabus, RusaintError> {
         let activate_event = self.find_syllabus_activate_event(code)?;
         self.process_syllabus_event(activate_event).await
     }
 
+    #[cfg(feature = "ozra-support")]
     fn find_syllabus_activate_event(&self, code: &str) -> Result<Event, RusaintError> {
         let parser = ElementParser::new(self.body());
         let table = parser.read(SapTableBodyCommand::new(Self::MAIN_TABLE))?;
@@ -618,6 +623,7 @@ impl<'app> CourseScheduleApplication {
             })
     }
 
+    #[cfg(feature = "ozra-support")]
     async fn send_syllabus_event(
         &mut self,
         activate_event: Event,
@@ -645,6 +651,7 @@ impl<'app> CourseScheduleApplication {
     /// 테이블 스크롤을 자동으로 수행합니다.
     /// `fetch_syllabus`가 `true`이면 강의계획서도 함께 조회합니다.
     /// 강의계획서가 없는 강의의 경우 `syllabus` 필드가 `None`이 되며, 그 외 조회 오류는 에러로 전파됩니다.
+    #[cfg(feature = "ozra-support")]
     pub async fn find_detailed_lectures(
         &mut self,
         year: u32,
@@ -734,7 +741,7 @@ impl<'app> CourseScheduleApplication {
     /// 테이블 스크롤을 자동으로 수행합니다.
     /// `fetch_syllabus`가 `true`이면 강의계획서도 함께 조회합니다.
     /// 강의계획서가 없는 강의의 경우 `syllabus` 필드가 `None`이 되며, 그 외 조회 오류는 `Err`를 yield하고 stream이 종료됩니다.
-    #[cfg(feature = "stream")]
+    #[cfg(all(feature = "stream", feature = "ozra-support"))]
     pub fn find_detailed_lectures_stream<'a>(
         &'a mut self,
         year: u32,

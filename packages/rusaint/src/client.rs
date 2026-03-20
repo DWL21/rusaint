@@ -26,11 +26,155 @@ use crate::{RusaintError, USaintSession, utils::DEFAULT_USER_AGENT};
 const SSU_WEBDYNPRO_BASE_URL: &str = "https://ecc.ssu.ac.kr/sap/bc/webdynpro/SAP/";
 const INITIAL_CLIENT_DATA_WD01: &str = "ClientWidth:1920px;ClientHeight:1000px;ScreenWidth:1920px;ScreenHeight:1080px;ScreenOrientation:landscape;ThemedTableRowHeight:33px;ThemedFormLayoutRowHeight:32px;ThemedSvgLibUrls:{\"SAPGUI-icons\":\"https://ecc.ssu.ac.kr:8443/sap/public/bc/ur/nw5/themes/~cache-20210223121230/Base/baseLib/sap_fiori_3/svg/libs/SAPGUI-icons.svg\",\"SAPWeb-icons\":\"https://ecc.ssu.ac.kr:8443/sap/public/bc/ur/nw5/themes/~cache-20210223121230/Base/baseLib/sap_fiori_3/svg/libs/SAPWeb-icons.svg\"};ThemeTags:Fiori_3,Touch;ThemeID:sap_fiori_3;SapThemeID:sap_fiori_3;DeviceType:DESKTOP";
 const INITIAL_CLIENT_DATA_WD02: &str = "ThemedTableRowHeight:25px";
+
+// WASM: wrapper struct that adds cookie injection to reqwest::Client
+#[cfg(target_arch = "wasm32")]
+mod wasm_client {
+    use super::*;
+    use reqwest::header::COOKIE;
+    use wdpe::{
+        body::{Body, BodyUpdate},
+        error::ClientError,
+        requests::WebDynproRequests,
+        state::SapSsrClient,
+    };
+
+    /// reqwest::Client + session cookies for WASM
+    #[derive(Debug)]
+    pub struct WasmCookieClient {
+        pub client: reqwest::Client,
+        pub session: Arc<USaintSession>,
+    }
+
+    impl WebDynproRequests for WasmCookieClient {
+        async fn navigate(&self, base_url: &Url, name: &str) -> Result<Body, ClientError> {
+            let url = {
+                let mut u = base_url.to_string();
+                if !u.ends_with('/') {
+                    u.push('/');
+                }
+                u.push_str(name);
+                u.push_str("?sap-wd-stableids=X#");
+                u
+            };
+
+            let parsed = Url::parse(&url).map_err(|e| ClientError::FailedRequest(e.to_string()))?;
+            let mut req = self.client.get(&url);
+
+            if let Some(cookies) = self.session.cookie_header_for_url(&parsed) {
+                req = req.header(COOKIE, cookies);
+            }
+
+            let response = req
+                .send()
+                .await
+                .map_err(|e| ClientError::FailedRequest(e.to_string()))?;
+
+            // Store any Set-Cookie headers from the response
+            self.session
+                .store_cookies_from_headers(response.headers(), response.url());
+
+            if !response.status().is_success() {
+                return Err(ClientError::InvalidResponse(response.status().to_string()));
+            }
+
+            let text = response
+                .text()
+                .await
+                .map_err(|e| ClientError::FailedRequest(e.to_string()))?;
+
+            Ok(Body::new(text)?)
+        }
+
+        async fn send_events(
+            &self,
+            base_url: &Url,
+            ssr_client: &SapSsrClient,
+            serialized_events: &str,
+        ) -> Result<BodyUpdate, ClientError> {
+            use reqwest::header::{ACCEPT, CONTENT_TYPE, HeaderValue};
+
+            let url = ssr_client.build_action_url(base_url)?;
+            let params = [
+                ("sap-charset", ssr_client.charset.as_str()),
+                ("sap-wd-secure-id", ssr_client.wd_secure_id.as_str()),
+                ("fesrAppName", ssr_client.app_name.as_str()),
+                (
+                    "fesrUseBeacon",
+                    if ssr_client.use_beacon {
+                        "true"
+                    } else {
+                        "false"
+                    },
+                ),
+                ("SAPEVENTQUEUE", serialized_events),
+            ];
+
+            let body: String = params
+                .iter()
+                .map(|(k, v)| {
+                    format!(
+                        "{}={}",
+                        url::form_urlencoded::byte_serialize(k.as_bytes()).collect::<String>(),
+                        url::form_urlencoded::byte_serialize(v.as_bytes()).collect::<String>()
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("&");
+
+            let parsed =
+                Url::parse(&url).map_err(|e| ClientError::FailedRequest(e.to_string()))?;
+
+            let mut req = self
+                .client
+                .post(&url)
+                .header(ACCEPT, HeaderValue::from_static("*/*"))
+                .header(
+                    CONTENT_TYPE,
+                    HeaderValue::from_static(
+                        "application/x-www-form-urlencoded; charset=UTF-8",
+                    ),
+                )
+                .header(
+                    "X-Requested-With",
+                    HeaderValue::from_static("XMLHttpRequest"),
+                )
+                .body(body);
+
+            if let Some(cookies) = self.session.cookie_header_for_url(&parsed) {
+                req = req.header(COOKIE, cookies);
+            }
+
+            let response = req
+                .send()
+                .await
+                .map_err(|e| ClientError::FailedRequest(e.to_string()))?;
+
+            // Store any Set-Cookie headers from the response
+            self.session
+                .store_cookies_from_headers(response.headers(), response.url());
+
+            if !response.status().is_success() {
+                return Err(ClientError::InvalidResponse(response.status().to_string()));
+            }
+
+            let response_text = response
+                .text()
+                .await
+                .map_err(|e| ClientError::FailedRequest(e.to_string()))?;
+            Ok(BodyUpdate::new(&response_text)?)
+        }
+    }
+}
+
 /// u-saint에 접속하기 위한 기본 클라이언트
 #[derive(Debug)]
 pub struct USaintClient {
     state: WebDynproState,
+    #[cfg(not(target_arch = "wasm32"))]
     client: reqwest::Client,
+    #[cfg(target_arch = "wasm32")]
+    client: wasm_client::WasmCookieClient,
 }
 
 impl<'a> USaintClient {
@@ -44,7 +188,8 @@ impl<'a> USaintClient {
 
     async fn new(
         state: WebDynproState,
-        client: reqwest::Client,
+        #[cfg(not(target_arch = "wasm32"))] client: reqwest::Client,
+        #[cfg(target_arch = "wasm32")] client: wasm_client::WasmCookieClient,
     ) -> Result<USaintClient, WebDynproError> {
         let mut client = USaintClient { state, client };
         client.load_placeholder().await?;
@@ -86,7 +231,7 @@ impl<'a> USaintClient {
         Ok(())
     }
 
-    /// 이벤트를 처리합니다. [`process_event()`](WebDynproClient::process_event)를 참조하세요.
+    /// 이벤트를 처리합니다.
     pub async fn process_event(
         &mut self,
         force_send: bool,
@@ -170,18 +315,38 @@ impl USaintClientBuilder {
     /// 애플리케이션 이름과 함께 [`USaintClient`]을 생성합니다.
     pub async fn build(self, name: &str) -> Result<USaintClient, WebDynproError> {
         let base_url = Url::parse(SSU_WEBDYNPRO_BASE_URL).unwrap();
-        let client = if let Some(session) = self.session {
-            reqwest::Client::builder()
-                .cookie_provider(session)
-                .user_agent(DEFAULT_USER_AGENT)
-                .build()
-                .unwrap()
-        } else {
-            reqwest::Client::builder()
-                .user_agent(DEFAULT_USER_AGENT)
-                .build()
-                .unwrap()
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let client = {
+            if let Some(session) = self.session {
+                reqwest::Client::builder()
+                    .cookie_provider(session)
+                    .user_agent(DEFAULT_USER_AGENT)
+                    .build()
+                    .unwrap()
+            } else {
+                reqwest::Client::builder()
+                    .user_agent(DEFAULT_USER_AGENT)
+                    .build()
+                    .unwrap()
+            }
         };
+
+        #[cfg(target_arch = "wasm32")]
+        let client = {
+            let http_client = reqwest::Client::builder()
+                .user_agent(DEFAULT_USER_AGENT)
+                .build()
+                .unwrap();
+            let session = self
+                .session
+                .unwrap_or_else(|| Arc::new(USaintSession::anonymous()));
+            wasm_client::WasmCookieClient {
+                client: http_client,
+                session,
+            }
+        };
+
         let body = client.navigate(&base_url, name).await?;
         let state = WebDynproState::new(base_url, name.to_string(), body);
         USaintClient::new(state, client).await

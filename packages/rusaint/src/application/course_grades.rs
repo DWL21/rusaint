@@ -1,5 +1,6 @@
 use self::model::{ClassGrade, CourseType, GradeSummary, GradesByClassification, SemesterGrade};
 use crate::application::utils::input_field::InputFieldExt as _;
+#[cfg(feature = "ozra-support")]
 use crate::application::utils::oz::{
     extract_oz_url_from_script_calls, fetch_data_module, parse_oz_url_params,
 };
@@ -294,6 +295,7 @@ impl<'a> CourseGradesApplication {
     }
 
     /// 이수구분별 성적 데이터를 OZ 서버에서 가져옵니다.
+    #[cfg(feature = "ozra-support")]
     pub async fn grades_by_classification(
         &mut self,
         course_type: CourseType,

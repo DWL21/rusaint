@@ -181,6 +181,7 @@ pub(crate) fn parse_oz_url_params(oz_url: &str) -> Result<OzUrlParams, RusaintEr
 }
 
 /// [`OzUrlParams`]를 사용하여 OzClient를 생성, 세션 초기화, 로그인, DataModule 데이터를 가져옵니다.
+#[cfg(feature = "ozra-support")]
 pub(crate) async fn fetch_data_module(
     oz_params: &OzUrlParams,
 ) -> Result<ozra::types::DataModuleResponse, RusaintError> {

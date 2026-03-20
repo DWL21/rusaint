@@ -84,7 +84,7 @@ uniffi::setup_scaffolding!();
 /// `uniffi` 지원을 위한 모듈
 pub mod uniffi_support;
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 #[allow(missing_docs)]
 pub mod global_test_utils {
     use crate::{USaintSession, model::SemesterType};
