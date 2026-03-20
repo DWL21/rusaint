@@ -234,6 +234,58 @@ rusaint optional-elective -y 2025 -s 1 -n "['23이후]과학·기술"
 ]
 ```
 
+## chapel-info (채플 정보 조회)
+
+- 로그인한 사용자의 채플 정보(좌석번호, 출결현황, 결석신청 내역)를 가져옵니다.
+
+### Usage
+
+```bash
+rusaint chapel-info information --year <YEAR> --semester <SEMESTER>
+
+# 짧은 옵션 사용
+rusaint chapel-info information -y <YEAR> -s <SEMESTER>
+```
+
+### Examples
+
+```bash
+rusaint chapel-info information --year 2026 --semester 1
+
+# 짧은 옵션 사용
+rusaint chapel-info information -y 2026 -s 1
+```
+
+```
+absence_requests:    (없음)
+attendances:
+  [1]
+    attendance:            출석
+    category:              메시지 채플
+    class_date:            2026.03.11
+    division:              2150101507
+    instructor:            반광준
+    instructor_department: 교목실
+    note:
+    result:                매우낮음
+    title:
+general_information:
+  absence_time: 0
+  chapel_room:  한경직기념관 08110
+  chapel_time:  수 10:30-11:20 (08110-반광준)
+  division:     2150101507
+  floor_level:  2
+  note:
+  result:
+  seat_number:  G - 8 - 2
+semester:            One
+year:                2026
+```
+
+> **Note:** `--format json` 옵션을 사용하면 JSON 형식으로 출력됩니다.
+
+---
+
 ## chapel (채플)
 
 - 채플 과목 정보를 가져와 json 파일로 추출합니다.
