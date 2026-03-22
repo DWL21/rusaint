@@ -545,11 +545,13 @@ impl ClassGradeItem {
     }
 }
 
+#[cfg(feature = "ozra-support")]
 use ozra::types::{DataSet, FieldValue};
 
 use crate::{ApplicationError, RusaintError};
 
 /// OZ DataModule row에서 주어진 필드명에 해당하는 값을 문자열로 추출합니다.
+#[cfg(feature = "ozra-support")]
 fn get_string_field(row: &[(String, FieldValue)], field_name: &str) -> String {
     row.iter()
         .find(|(name, _)| name == field_name)
@@ -558,6 +560,7 @@ fn get_string_field(row: &[(String, FieldValue)], field_name: &str) -> String {
 }
 
 /// OZ DataModule 응답에서 주어진 이름의 데이터셋 행들을 찾아 반환합니다.
+#[cfg(feature = "ozra-support")]
 fn find_dataset<'a>(datasets: &'a [DataSet], name: &str) -> &'a [Vec<(String, FieldValue)>] {
     datasets
         .iter()
@@ -568,6 +571,7 @@ fn find_dataset<'a>(datasets: &'a [DataSet], name: &str) -> &'a [Vec<(String, Fi
 
 impl GradesByClassification {
     /// OZ DataModule의 데이터셋으로부터 [`GradesByClassification`]를 생성합니다.
+    #[cfg(feature = "ozra-support")]
     pub fn from_datasets(datasets: &[DataSet]) -> Result<Self, RusaintError> {
         // Shadow_master — 학생 정보 (1 row)
         let master_rows = find_dataset(datasets, "Shadow_master");

@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "ozra-support")]
 use ozra::types::{DataSet, FieldValue};
 
 use crate::ApplicationError;
@@ -87,6 +88,7 @@ pub struct SyllabusCompetency {
 
 /// OZ DataModule row에서 주어진 필드명에 해당하는 값을 문자열로 추출합니다.
 /// 필드가 존재하지 않으면 빈 문자열을 반환합니다.
+#[cfg(feature = "ozra-support")]
 fn get_string_field(row: &[(String, FieldValue)], field_name: &str) -> String {
     row.iter()
         .find(|(name, _)| name == field_name)
@@ -96,6 +98,7 @@ fn get_string_field(row: &[(String, FieldValue)], field_name: &str) -> String {
 
 /// OZ DataModule 응답에서 주어진 이름의 데이터셋 행들을 찾아 반환합니다.
 /// 데이터셋이 존재하지 않으면 빈 슬라이스를 반환합니다.
+#[cfg(feature = "ozra-support")]
 fn find_dataset<'a>(datasets: &'a [DataSet], name: &str) -> &'a [Vec<(String, FieldValue)>] {
     datasets
         .iter()
@@ -109,6 +112,7 @@ impl LectureSyllabus {
     ///
     /// `ET_PLAN` 데이터셋에 강의계획서 메인 정보(1 row)가 포함되어 있어야 합니다.
     /// 데이터셋이 비어있으면 에러를 반환합니다.
+    #[cfg(feature = "ozra-support")]
     pub fn from_datasets(datasets: &[DataSet]) -> Result<Self, RusaintError> {
         // ET_PLAN — main syllabus info (1 row expected)
         let plan_rows = find_dataset(datasets, "ET_PLAN");

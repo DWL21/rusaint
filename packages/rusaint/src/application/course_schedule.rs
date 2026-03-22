@@ -2,6 +2,7 @@ use crate::application::course_schedule::model::{DetailedLecture, LectureDetail,
 use crate::application::course_schedule::utils::{
     combo_box_items, select_lv1, select_lv2, select_tab,
 };
+#[cfg(feature = "ozra-support")]
 use crate::application::utils::oz::{
     extract_oz_url_from_script_calls, fetch_data_module, parse_oz_url_params,
 };
@@ -450,6 +451,7 @@ impl<'app> CourseScheduleApplication {
         Ok(detail)
     }
 
+    #[cfg(feature = "ozra-support")]
     async fn process_syllabus_event(
         &mut self,
         activate_event: Event,
@@ -474,6 +476,17 @@ impl<'app> CourseScheduleApplication {
         let response = fetch_data_module(&oz_params).await?;
         let syllabus = LectureSyllabus::from_datasets(&response.datasets)?;
         Ok(syllabus)
+    }
+
+    #[cfg(not(feature = "ozra-support"))]
+    async fn process_syllabus_event(
+        &mut self,
+        _activate_event: Event,
+    ) -> Result<LectureSyllabus, RusaintError> {
+        Err(ApplicationError::OzDataFetchError(
+            "OZ Report support is not enabled in this build".to_string(),
+        )
+        .into())
     }
 
     async fn scroll_table_to(&mut self, position: usize) -> Result<(), WebDynproError> {

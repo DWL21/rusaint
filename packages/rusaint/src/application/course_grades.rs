@@ -1,5 +1,6 @@
 use self::model::{ClassGrade, CourseType, GradeSummary, GradesByClassification, SemesterGrade};
 use crate::application::utils::input_field::InputFieldExt as _;
+#[cfg(feature = "ozra-support")]
 use crate::application::utils::oz::{
     extract_oz_url_from_script_calls, fetch_data_module, parse_oz_url_params,
 };
@@ -294,6 +295,7 @@ impl<'a> CourseGradesApplication {
     }
 
     /// 이수구분별 성적 데이터를 OZ 서버에서 가져옵니다.
+    #[cfg(feature = "ozra-support")]
     pub async fn grades_by_classification(
         &mut self,
         course_type: CourseType,
@@ -336,6 +338,18 @@ impl<'a> CourseGradesApplication {
         let response = fetch_data_module(&oz_params).await?;
         let result = GradesByClassification::from_datasets(&response.datasets)?;
         Ok(result)
+    }
+
+    /// 이수구분별 성적 데이터를 OZ 서버에서 가져옵니다. (OZ 지원 미활성화)
+    #[cfg(not(feature = "ozra-support"))]
+    pub async fn grades_by_classification(
+        &mut self,
+        _course_type: CourseType,
+    ) -> Result<GradesByClassification, RusaintError> {
+        Err(ApplicationError::OzDataFetchError(
+            "OZ Report support is not enabled in this build".to_string(),
+        )
+        .into())
     }
 
     /// 학기별 평점 정보를 가져옵니다.

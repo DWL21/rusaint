@@ -170,6 +170,7 @@ impl USaintClientBuilder {
     /// 애플리케이션 이름과 함께 [`USaintClient`]을 생성합니다.
     pub async fn build(self, name: &str) -> Result<USaintClient, WebDynproError> {
         let base_url = Url::parse(SSU_WEBDYNPRO_BASE_URL).unwrap();
+        #[cfg(feature = "native-session")]
         let client = if let Some(session) = self.session {
             reqwest::Client::builder()
                 .cookie_provider(session)
@@ -181,6 +182,22 @@ impl USaintClientBuilder {
                 .user_agent(DEFAULT_USER_AGENT)
                 .build()
                 .unwrap()
+        };
+        #[cfg(not(feature = "native-session"))]
+        let client = {
+            let mut builder =
+                reqwest::Client::builder().user_agent(DEFAULT_USER_AGENT);
+            if let Some(session) = self.session {
+                if !session.cookies.is_empty() {
+                    let mut headers = reqwest::header::HeaderMap::new();
+                    headers.insert(
+                        reqwest::header::COOKIE,
+                        session.cookies.parse().unwrap(),
+                    );
+                    builder = builder.default_headers(headers);
+                }
+            }
+            builder.build().unwrap()
         };
         let body = client.navigate(&base_url, name).await?;
         let state = WebDynproState::new(base_url, name.to_string(), body);
