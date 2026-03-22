@@ -1,6 +1,6 @@
 use reqwest::{
     Client,
-    header::{COOKIE, HOST, SET_COOKIE, HeaderValue},
+    header::{COOKIE, HOST, HeaderValue, SET_COOKIE},
 };
 use url::Url;
 use wdpe::error::{ClientError, WebDynproError};
@@ -241,29 +241,101 @@ pub use native::USaintSession;
 #[cfg(feature = "native-session")]
 pub use native::obtain_ssu_sso_token;
 
-// ── WASM-compatible session ──────────────────────────────────────────────────
+// ── WASM-compatible session (domain-aware cookie store) ──────────────────────
 
 #[cfg(not(feature = "native-session"))]
 mod wasm_session {
+    use std::collections::HashMap;
+    use std::sync::RwLock;
+
     use super::*;
 
     /// u-saint 로그인이 필요한 애플리케이션 사용 시 애플리케이션에 제공하는 세션 (WASM 호환)
     #[derive(Debug, Default)]
     pub struct USaintSession {
-        /// Combined Cookie header value
-        pub(crate) cookies: String,
+        /// domain -> (cookie_name -> cookie_value)
+        pub(crate) cookies: RwLock<HashMap<String, HashMap<String, String>>>,
     }
 
     impl USaintSession {
         /// 익명 세션을 반환합니다.
         pub fn anonymous() -> USaintSession {
             USaintSession {
-                cookies: String::new(),
+                cookies: RwLock::new(HashMap::new()),
             }
+        }
+
+        /// Set-Cookie 헤더들을 파싱하여 도메인별로 쿠키를 저장합니다.
+        pub fn store_cookies_from_headers(
+            &self,
+            headers: &reqwest::header::HeaderMap,
+            url: &Url,
+        ) {
+            let domain = url.host_str().unwrap_or("").to_string();
+            let mut store = self.cookies.write().unwrap();
+            for value in headers.get_all(SET_COOKIE).iter() {
+                if let Ok(cookie_str) = value.to_str() {
+                    if let Some(name_value) = cookie_str.split(';').next() {
+                        if let Some((name, value)) = name_value.split_once('=') {
+                            let name = name.trim().to_string();
+                            let value = value.trim().to_string();
+                            let cookie_domain = cookie_str
+                                .split(';')
+                                .find_map(|part| {
+                                    let part = part.trim();
+                                    if part.to_lowercase().starts_with("domain=") {
+                                        Some(
+                                            part[7..]
+                                                .trim()
+                                                .trim_start_matches('.')
+                                                .to_string(),
+                                        )
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .unwrap_or_else(|| domain.clone());
+                            store
+                                .entry(cookie_domain)
+                                .or_insert_with(HashMap::new)
+                                .insert(name, value);
+                        }
+                    }
+                }
+            }
+        }
+
+        /// 특정 URL에 대한 쿠키 헤더 값을 반환합니다.
+        pub fn cookie_header_for_url(&self, url: &Url) -> Option<HeaderValue> {
+            let host = url.host_str().unwrap_or("");
+            let store = self.cookies.read().unwrap();
+            let mut cookies = Vec::new();
+            for (domain, domain_cookies) in store.iter() {
+                if host == domain || host.ends_with(&format!(".{domain}")) {
+                    for (name, value) in domain_cookies {
+                        cookies.push(format!("{name}={value}"));
+                    }
+                }
+            }
+            if cookies.is_empty() {
+                None
+            } else {
+                HeaderValue::from_str(&cookies.join("; ")).ok()
+            }
+        }
+
+        /// 쿠키를 직접 저장합니다.
+        pub fn set_cookie(&self, domain: &str, name: &str, value: &str) {
+            let mut store = self.cookies.write().unwrap();
+            store
+                .entry(domain.trim_start_matches('.').to_string())
+                .or_insert_with(HashMap::new)
+                .insert(name.to_string(), value.to_string());
         }
 
         /// SSO 로그인 토큰으로 인증된 세션을 반환합니다.
         pub async fn with_token(id: &str, token: &str) -> Result<USaintSession, RusaintError> {
+            let session_store = Self::anonymous();
             let client = Client::builder()
                 .user_agent(DEFAULT_USER_AGENT)
                 .build()
@@ -286,47 +358,61 @@ mod wasm_session {
                     )))
                 })?;
 
-            let mut cookies = parse_set_cookie_headers(portal.headers());
+            session_store.store_cookies_from_headers(portal.headers(), portal.url());
+
+            // Set sToken cookie on ssu.ac.kr domain
+            session_store.set_cookie("ssu.ac.kr", "sToken", token);
 
             // Step 2: call SSO with token, carrying portal cookies
-            let cookie_str = cookies.join("; ");
-            let token_pair = format!("sToken={token}");
-            let combined = if cookie_str.is_empty() {
-                token_pair
-            } else {
-                format!("{cookie_str}; sToken={token}")
-            };
+            let saint_url = Url::parse("https://saint.ssu.ac.kr").unwrap();
+            let mut cookie_parts = Vec::new();
+            if let Some(existing) = session_store.cookie_header_for_url(&saint_url) {
+                if let Ok(s) = existing.to_str() {
+                    cookie_parts.push(s.to_string());
+                }
+            }
+            cookie_parts.push(format!("sToken={token}"));
+            let cookie_header = cookie_parts.join("; ");
 
-            let res = client
+            let req = client
                 .get(format!("{SSU_USAINT_SSO_URL}?sToken={token}&sIdno={id}"))
                 .headers(default_header())
-                .header(
-                    COOKIE,
-                    combined.parse::<HeaderValue>().map_err(|e| {
-                        WebDynproError::from(ClientError::FailedRequest(format!(
-                            "failed to build cookie header: {e}"
-                        )))
-                    })?,
-                )
+                .header(COOKIE, cookie_header.parse::<HeaderValue>().map_err(|e| {
+                    WebDynproError::from(ClientError::FailedRequest(format!(
+                        "failed to build cookie header: {e}"
+                    )))
+                })?)
                 .header(HOST, "saint.ssu.ac.kr".parse::<HeaderValue>().unwrap())
-                .send()
-                .await
+                .build()
                 .map_err(|e| {
                     WebDynproError::from(ClientError::FailedRequest(format!(
-                        "failed to send request: {e}"
+                        "failed to build request: {e}"
                     )))
                 })?;
 
-            cookies.extend(parse_set_cookie_headers(res.headers()));
-            let final_cookies = cookies.join("; ");
+            let res = client.execute(req).await.map_err(|e| {
+                WebDynproError::from(ClientError::FailedRequest(format!(
+                    "failed to send request: {e}"
+                )))
+            })?;
 
-            if final_cookies.contains("MYSAPSSO2") {
-                Ok(USaintSession {
-                    cookies: final_cookies,
-                })
+            session_store.store_cookies_from_headers(res.headers(), res.url());
+
+            if let Some(sapsso_cookies) = session_store.cookie_header_for_url(res.url()) {
+                let str = sapsso_cookies
+                    .to_str()
+                    .or(Err(ClientError::NoCookies(res.url().to_string())))
+                    .map_err(WebDynproError::from)?;
+                if str.contains("MYSAPSSO2") {
+                    Ok(session_store)
+                } else {
+                    Err(WebDynproError::from(ClientError::NoSuchCookie(
+                        "MYSAPSSO2".to_string(),
+                    )))?
+                }
             } else {
-                Err(WebDynproError::from(ClientError::NoSuchCookie(
-                    "MYSAPSSO2".to_string(),
+                Err(WebDynproError::from(ClientError::NoCookies(
+                    res.url().to_string(),
                 )))?
             }
         }
@@ -347,18 +433,24 @@ mod wasm_session {
             .user_agent(DEFAULT_USER_AGENT)
             .build()?;
 
-        // Step 1: GET login form
-        let resp1 = client
+        // Step 1: GET login form, collect session cookies
+        let login_resp = client
             .get(SMARTID_LOGIN_URL)
             .headers(default_header())
             .send()
             .await?;
 
-        let session_cookies = parse_set_cookie_headers(resp1.headers());
-        let cookie_str = session_cookies.join("; ");
+        let mut login_cookies = Vec::new();
+        for value in login_resp.headers().get_all(SET_COOKIE).iter() {
+            if let Ok(cookie_str) = value.to_str() {
+                if let Some(name_value) = cookie_str.split(';').next() {
+                    login_cookies.push(name_value.to_string());
+                }
+            }
+        }
 
-        let body_text = resp1.text().await?;
-        let (in_tp_bit, rqst_caus_cd) = super::parse_login_form(&body_text)?;
+        let body = login_resp.text().await?;
+        let (in_tp_bit, rqst_caus_cd) = super::parse_login_form(&body)?;
 
         let params = [
             ("in_tp_bit", in_tp_bit.as_str()),
@@ -367,32 +459,45 @@ mod wasm_session {
             ("pwd", password),
         ];
 
+        let form_body: String = params
+            .iter()
+            .map(|(k, v)| {
+                format!(
+                    "{}={}",
+                    url::form_urlencoded::byte_serialize(k.as_bytes()).collect::<String>(),
+                    url::form_urlencoded::byte_serialize(v.as_bytes()).collect::<String>()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("&");
+
         // Step 2: POST credentials, carrying session cookies
-        let mut req_builder = client
+        let mut req = client
             .post(SMARTID_LOGIN_FORM_REQUEST_URL)
             .headers(default_header())
-            .form(&params);
+            .header(
+                reqwest::header::CONTENT_TYPE,
+                "application/x-www-form-urlencoded",
+            )
+            .body(form_body);
 
-        if !cookie_str.is_empty() {
-            req_builder =
-                req_builder.header(COOKIE, cookie_str.parse::<HeaderValue>().unwrap());
+        if !login_cookies.is_empty() {
+            req = req.header(COOKIE, login_cookies.join("; "));
         }
 
-        let res = req_builder.send().await?;
+        let res = req.send().await?;
 
-        // Extract sToken from Set-Cookie response headers
         let cookie_token = res
             .headers()
+            .get_all(SET_COOKIE)
             .iter()
-            .filter(|(name, _)| *name == SET_COOKIE)
-            .find_map(|(_, value)| {
+            .find_map(|value| {
                 value.to_str().ok().and_then(|s| {
-                    let pair = s.split(';').next()?.trim();
-                    pair.strip_prefix("sToken=").and_then(|val| {
-                        if val.is_empty() {
-                            None
+                    s.split(';').next()?.split_once('=').and_then(|(name, val)| {
+                        if name.trim() == "sToken" && !val.trim().is_empty() {
+                            Some(val.trim().to_string())
                         } else {
-                            Some(val.to_string())
+                            None
                         }
                     })
                 })
@@ -411,19 +516,6 @@ mod wasm_session {
         cookie_token.ok_or(SsuSsoError::CantFindToken(
             message.unwrap_or("Internal Error".to_string()),
         ))
-    }
-
-    fn parse_set_cookie_headers(headers: &reqwest::header::HeaderMap) -> Vec<String> {
-        headers
-            .iter()
-            .filter(|(name, _)| *name == SET_COOKIE)
-            .filter_map(|(_, value)| {
-                value
-                    .to_str()
-                    .ok()
-                    .and_then(|s| s.split(';').next().map(|pair| pair.trim().to_string()))
-            })
-            .collect()
     }
 }
 
